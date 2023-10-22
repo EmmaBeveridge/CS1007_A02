@@ -15,7 +15,7 @@ GetFilesToProcess(){
             use_test_files=true
             ;;
         ?)
-            printf "%s\t$(date)\ERROR: Invalid flag supplied\n" "$0" >&2 #Write to stderr as cannot yet check processing directory with log file exists
+            printf "%s\t$(date)\tERROR: Invalid flag supplied\n" "$0" >&2 #Write to stderr as cannot yet check processing directory with log file exists
             exit 1
             ;;
         esac
@@ -65,18 +65,23 @@ ProcessData(){
 
     while IFS= read -r route_file_name; do #Set IFS to empty string to remove any leading/trailing whitespace from lines. Read file names to process as lines from FILES_TO_PROCESS variable       
         route_name=${route_file_name%.*} #Remove .csv extension from filename to get route name
-        mean_duration=$(tail -n +2 < "$path_to_data/$route_file_name"| awk -f "./GetMeanDurationForRoute.awk") #route file data redirected into tail command to remove header row. Output from tail command piped to awk command as input to awk script to calculate mean duration of route
-        mean_duration_formatted=$(date -u -d @${mean_duration} +"%T") #awk script returns mean duration as seconds, use date command to convert to HH:MM:SS format
-        printf "$route_name,$mean_duration_formatted\n" >> "$path_to_out/duration.csv" #Append route name and formatted mean duration of route to duration.csv file with fields delimited by comma
-        tail -n +2 < "$path_to_data/$route_file_name"| awk -f "./GetFuelSumsByIDForRoute.awk" >> "$path_to_out/engineTemp.csv" #route file data redirected into tail command to remove header row. Output from tail command piped to awk command as input to awk script to sum total fuel used by ID for vehicles for this route. Vehicle ID and fuel total sum appended to temporary engine processing file
+        mean_duration="$(tail -n +2 < "$path_to_data/$route_file_name"| awk -f "./GetMeanDurationForRoute.awk")" #route file data redirected into tail command to remove header row. Output from tail command piped to awk command as input to awk script to calculate mean duration of route. Command substitution quoted to allow exit code of awk cmd as last cmd in pipeline to be checked.
+        if [ $? -ne 0 ]; then #awk cmd is last cmd in pipeline so can be accessed using $? variable. Non-zero exit code indicates error in processing file.
+            printf "%s\t$(date)\tERROR: GetMeanDurationForRoute.awk cannot process file %s\n" "$0" "$route_file_name">&2 #Write error message to stderr which will be redirected to log        
+        else #Further processing/ writing data of problematic file is prevented
+            mean_duration_formatted=$(date -u -d @${mean_duration} +"%T") #awk script returns mean duration as seconds, use date command to convert to HH:MM:SS format
+            printf "$route_name,$mean_duration_formatted\n" >> "$path_to_out/duration.csv" #Append route name and formatted mean duration of route to duration.csv file with fields delimited by comma
+            route_fuel_sums="$(tail -n +2 < "$path_to_data/$route_file_name"| awk -f "./GetFuelSumsByIDForRoute.awk")" #route file data redirected into tail command to remove header row. Output from tail command piped to awk command as input to awk script to sum total fuel used by ID for vehicles for this route. Vehicle IDs and fuel total sums stored in variable. Command substitution quoted to allow exit code of awk cmd as last cmd in pipeline to be checked.
+            if [ $? -ne 0 ]; then  #awk cmd is last cmd in pipeline so can be accessed using $? variable. Non-zero exit code indicates error in processing file.
+                printf "%s\t$(date)\tERROR: GetFuelSumsByIDForRoute.awk cannot process file %s\n" "$0" "$route_file_name">&2 #Write error message to stderr which will be redirected to log      
+            else #Writing data of problematic file is prevented
+                printf "%s\n" "$route_fuel_sums" >> "$path_to_out/engineTemp.csv" #Vehicle IDs and fuel sums written to temporary engine processing file.
+            fi
+        fi
     done <<< "$FILES_TO_PROCESS" #Redirect FILES_TO_PROCESS string into read command stdin
-
     awk -f "./GetFuelSumsByIDForRoute.awk" "$path_to_out/engineTemp.csv"|sort >> "$path_to_out/engine.csv" #Run awk script to sum fuel usage by ID on file containing partial totals of fuel usage for vehicle for route. By summing route fuel usage for vehicle for all routes we get the total fuel used by the vehicle. Sort this output on vehicle ID and append to engine.csv file
     rm "$path_to_out/engineTemp.csv" #Delete temporary engine processing file
-
-
-
-
+    
 } 1>>"$PATH_TO_PROCESSING_DIRECTORY/log.txt" 2>&1 #redirect stdout and stderr for function to log.txt  
 
 
